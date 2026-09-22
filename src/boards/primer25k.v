@@ -9,3 +9,4 @@
 // not brought out), and the crystal is 50 MHz, the same as Console 60K, so the exact-lock
 // PLL needs no change at all.
 `define PRIMER25K
+`define SMALL_BOARD

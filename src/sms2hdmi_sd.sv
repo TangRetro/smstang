@@ -24,8 +24,13 @@
 // scaled 256 -> 576 horizontally by a fractional counter, which is 4:3 inside a frame the
 // sink already displays as 4:3.
 
-module sms2hdmi_sd (
-    input clk,                  // core clock, 53.75 MHz
+module sms2hdmi_sd #(
+    // 201 + 26875 on Console 60K / Primer 25K (26.875 MHz pixel clock); 202 + 27000 on
+    // Nano 20K (27.000 MHz). Same raster either way -- see hdmi.sv modes 201/202.
+    parameter VIDEOID = 201,
+    parameter CLKFRQ  = 26875           // clk_pixel in kHz, for the audio divider
+)(
+    input clk,                  // core clock, 53.75 MHz (54.0 on Nano 20K)
     input resetn,
 
     // sms video signals
@@ -54,7 +59,6 @@ module sms2hdmi_sd (
     output [2:0] tmds_d_p
 );
 
-localparam CLKFRQ = 26875;          // clk_pixel in kHz -- feeds the audio divider below
 localparam AUDIO_BIT_WIDTH = 16;
 localparam AUDIO_RATE = 48000;
 
@@ -223,7 +227,6 @@ end
 logic [2:0] tmds;
 logic       tmdsClk;
 
-localparam VIDEOID = 201;
 localparam VIDEO_REFRESH = 60.0;
 
 hdmi #( .VIDEO_ID_CODE(VIDEOID),

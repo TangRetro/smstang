@@ -11,8 +11,9 @@ module smstang_top(
 	input UART_RXD,
 	output UART_TXD,
 
-`ifdef PRIMER25K
-    // Primer 25K carries two LEDs, not eight, and no second USB port; O_sdram_cke is tied
+`ifdef SMALL_BOARD
+    // Primer 25K and Nano 20K carry two LEDs, not eight, and no second USB port.
+    // On Primer 25K O_sdram_cke is also tied high on the SDRAM PMOD. The packages are
     // high on that board's SDRAM PMOD so the core does not drive it. Pins are the real
     // constraint on this package (68 regular I/O), so nothing unused is brought out.
     output [1:0] led,
@@ -31,9 +32,11 @@ module smstang_top(
     output ds_cs2,
 
     // USB1 and USB2
+`ifndef NANO20K
     inout usb1_dp,
     inout usb1_dn,
-`ifndef PRIMER25K
+`endif
+`ifndef SMALL_BOARD
     inout usb2_dp,
     inout usb2_dn,
 `endif
@@ -47,10 +50,20 @@ module smstang_top(
     output O_sdram_cas_n,           // columns address select
     output O_sdram_ras_n,           // row address select
     output O_sdram_wen_n,           // write enable
+`ifdef NANO20K
+    // Nano 20K: the GW2AR's in-package SDRAM, 32 bits x 2K rows x 256 cols x 4 banks.
+    // Fixed internal pins -- no .cst entries. Only the low 16 bits are used (see the
+    // adapter at the sdram instance), which still gives this core 4 MB.
+    inout [31:0] IO_sdram_dq,
+    output [10:0] O_sdram_addr,
+    output [1:0] O_sdram_ba,
+    output [3:0] O_sdram_dqm,
+`else
     inout [15:0] IO_sdram_dq,       // bidirectional data bus
     output [12:0] O_sdram_addr,     // multiplexed address bus
     output [1:0] O_sdram_ba,        // two banks
     output [1:0] O_sdram_dqm,  
+`endif
 
     // HDMI TX
     output       tmds_clk_n,
@@ -86,11 +99,30 @@ wire clk_sys, clk27;
 wire clk_pixel, clk_5x_pixel;
 wire locked;
 
+// clk_sys in Hz, for everything that derives timing from it (UART baud in iosys, DS2
+// controller polling). Upstream hard-codes 53_700_000; the exact-lock PLLs change it.
+`ifdef NANO20K
+localparam SYS_FREQ = 54_000_000;
+`elsif EXACT_LOCK
+localparam SYS_FREQ = 53_750_000;
+`else
+localparam SYS_FREQ = 53_700_000;
+`endif
+
 `ifdef VERILATOR
 assign clk_sys = clk_g;
 assign locked = 1'b1;
 `else
-`ifdef EXACT_LOCK
+`ifdef NANO20K
+// Nano 20K: 27 MHz crystal, GW2AR rPLLs. core 54 = 27 x 2, pixel 27 = the crystal rate,
+// TMDS 135 = 27 x 5, so core/pixel is exactly 2 and the same hdmi mode timing holds.
+// See src/pllr/pll_nano_exact.v for the cost (+0.55% core speed).
+pll_nano_exact pll_exact_inst(
+    .clkin(clk_g), .clk_sys(clk_sys), .clk_sdram(O_sdram_clk),
+    .clk_pixel(clk_pixel), .clk_5x(clk_5x_pixel), .lock(locked)
+);
+assign clk27 = 1'b0;
+`elsif EXACT_LOCK
 // EXACT LOCK (2026-09-22): one VCO for the core, the SDRAM and the video clocks, so every
 // source line is exactly two output lines and the HDMI framebuffer is unnecessary.
 // See src/plla/pll_exact.v and src/sms2hdmi_sd.sv.
@@ -311,6 +343,10 @@ always @(posedge clk_sys) begin
 	end
 end
 
+`ifdef NANO20K
+wire [12:0] sdram_a13;          // see the NANO20K adapter just after this instance
+wire [1:0]  sdram_dqm2;
+`endif
 sdram ram (
 	.clk(clk_sys), .resetn(locked), .refresh_allowed(1'b1), .busy(),
 
@@ -325,10 +361,25 @@ sdram ram (
 	
     .req2(), .ack2(), .wr2(), .addr2(), .din2(), .dout2(), .be2(),
 
+`ifdef NANO20K
+    .SDRAM_DQ(IO_sdram_dq[15:0]), .SDRAM_A(sdram_a13), .SDRAM_BA(O_sdram_ba),
+    .SDRAM_nCS(O_sdram_cs_n), .SDRAM_nWE(O_sdram_wen_n),  .SDRAM_nRAS(O_sdram_ras_n),
+    .SDRAM_nCAS(O_sdram_cas_n), .SDRAM_CKE(O_sdram_cke), .SDRAM_DQM(sdram_dqm2)
+`else
     .SDRAM_DQ(IO_sdram_dq), .SDRAM_A(O_sdram_addr), .SDRAM_BA(O_sdram_ba),      
     .SDRAM_nCS(O_sdram_cs_n), .SDRAM_nWE(O_sdram_wen_n),  .SDRAM_nRAS(O_sdram_ras_n), 
     .SDRAM_nCAS(O_sdram_cas_n), .SDRAM_CKE(O_sdram_cke), .SDRAM_DQM(O_sdram_dqm)
+`endif
 );
+`ifdef NANO20K
+// The controller is 16 bits wide with a 13-bit address bus; the in-package part is 32
+// bits with 11. It drives the low half only: the high half is left floating and its
+// byte masks held HIGH, so those 16 bits are never written and never read back.
+// sdram.v's NANO20K mapping keeps every row/column address inside A[10:0].
+assign O_sdram_addr     = sdram_a13[10:0];
+assign O_sdram_dqm      = {2'b11, sdram_dqm2};
+assign IO_sdram_dq[31:16] = 16'bz;
+`endif
 
 spram #(.widthad_a(14)) ram_inst
 (
@@ -363,7 +414,11 @@ wire [7:0] overlay_y;
 wire [14:0] overlay_color;
 
 `ifdef EXACT_LOCK
+`ifdef NANO20K
+sms2hdmi_sd #(.VIDEOID(202), .CLKFRQ(27000)) sms2hdmi_inst (
+`else
 sms2hdmi_sd sms2hdmi_inst (
+`endif
 	.clk(clk_sys), .resetn(1'b1),
 	.clk_pixel(clk_pixel),.clk_5x_pixel(clk_5x_pixel),
     .ce_pix(ce_pix), .x(x), .y(y), .color(color), .audio_l(audio_l), .audio_r(audio_r),
@@ -386,35 +441,34 @@ wire [11:0] joy1_mcu, joy2_mcu;
 assign joy1 = joy1_btns | joy1_usb | joy1_mcu;
 assign joy2 = joy2_btns | joy2_usb | joy2_mcu;
 
-`ifdef EXACT_LOCK
-controller_ds2 #(.FREQ(53_750_000))
-`else
-controller_ds2 #(.FREQ(53_700_000))
-`endif joy1_ds2 (
+controller_ds2 #(.FREQ(SYS_FREQ)) joy1_ds2 (
     .clk(clk_sys), .snes_buttons(joy1_btns),
     .ds_clk(ds_clk), .ds_miso(ds_miso), .ds_mosi(ds_mosi), .ds_cs(ds_cs) 
 );
-`ifdef EXACT_LOCK
-controller_ds2 #(.FREQ(53_750_000))
-`else
-controller_ds2 #(.FREQ(53_700_000))
-`endif joy2_ds2 (
+controller_ds2 #(.FREQ(SYS_FREQ)) joy2_ds2 (
    .clk(clk_sys), .snes_buttons(joy2_btns),
    .ds_clk(ds_clk2), .ds_miso(ds_miso2), .ds_mosi(ds_mosi2), .ds_cs(ds_cs2) 
 );
 
-wire clk12;
-wire pll_lock_12;
 wire usb_conerr;
 wire [1:0] usb_type;
+`ifdef NANO20K
+// No USB host pins on this board: gamepads come from the two DualShock ports.
+assign joy1_usb   = 12'b0;
+assign usb_conerr = 1'b0;
+assign usb_type   = 2'b00;
+`else
+wire clk12;
+wire pll_lock_12;
 pll_12 pll12(.clkin(clk_g), .clkout0(clk12), .lock(pll_lock_12));
 usb_hid_host usb_hid_host (
     .usbclk(clk12), .usbrst_n(pll_lock_12),
     .usb_dm(usb1_dn), .usb_dp(usb1_dp),
     .game_snes(joy1_usb), .typ(usb_type), .conerr(usb_conerr)
 );
-`ifdef PRIMER25K
-assign joy2_usb = 12'b0;            // Primer 25K brings out one USB port, not two
+`endif
+`ifdef SMALL_BOARD
+assign joy2_usb = 12'b0;            // small boards bring out one USB port at most
 `else
 usb_hid_host usb_hid_host2 (
     .usbclk(clk12), .usbrst_n(pll_lock_12),
@@ -426,11 +480,13 @@ usb_hid_host usb_hid_host2 (
 `ifdef PRIMER25K
 wire O_sdram_cke;                   // tied high on the board, kept so sdram.v still drives it
 assign led = ~{usb_type[0], usb_conerr};
+`elsif NANO20K
+assign led = ~{joy1[1:0]};          // no USB here, so show the first two pad buttons
 `else
 assign led = ~{joy1[4:0], usb_type, usb_conerr};
 `endif
 
-iosys_bl616 #(.COLOR_LOGO(15'b11111_00000_00000), .FREQ(53_700_000), .CORE_ID(5) )     // deep blue smstang logo
+iosys_bl616 #(.COLOR_LOGO(15'b11111_00000_00000), .FREQ(SYS_FREQ), .CORE_ID(5) )     // deep blue smstang logo
     sys_inst (
     .clk(clk_sys), .hclk(clk_pixel), .resetn(1'b1),
 

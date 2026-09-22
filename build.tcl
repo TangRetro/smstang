@@ -16,6 +16,11 @@ if {$dev eq "console60k_exact"} {
     set dev "console60k"
     set_option -output_base_name smstang_console60k_exact
 }
+if {$dev eq "nano20k_exact"} {
+    set exact 1
+    set dev "nano20k"
+    set_option -output_base_name smstang_nano20k_exact
+}
 if {$dev eq "primer25k_exact"} {
     set exact 1
     set dev "primer25k"
@@ -34,6 +39,22 @@ if {$dev eq "console60k"} {
         add_file -type verilog "src/plla/pll_53.v"
         add_file -type verilog "src/plla/pll_74.v"
     }
+} elseif {$dev eq "nano20k"} {
+    # Nano 20K (GW2AR-18C). EXACT LOCK ONLY. Different FPGA family from the other boards:
+    # rPLLs from a 27 MHz crystal (src/pllr/pll_nano_exact.v), in-package 32-bit SDRAM
+    # (src/sdram.v NANO20K mapping), and pcetang's pin file. pll_12 / USB are not used.
+    if {!$exact} { error "nano20k is exact-lock only: the stock frame buffer alone exceeds its 46 BSRAM." }
+    set_device GW2AR-LV18QN88C8/I7 -device_version C
+    add_file -type verilog "src/boards/nano20k.v"
+    add_file -type cst "src/boards/nano20k.cst"
+    add_file -type verilog "src/config_exact.v"
+    add_file -type verilog "src/pllr/pll_nano_exact.v"
+    # the same dual-purpose-pin set pcetang frees on this board
+    set_option -use_mspi_as_gpio 1
+    set_option -use_sspi_as_gpio 1
+    set_option -use_done_as_gpio 1
+    set_option -use_ready_as_gpio 1
+    set_option -use_i2c_as_gpio 1
 } elseif {$dev eq "primer25k"} {
     # Primer 25K (GW5A-25A). Same family and the same 50 MHz crystal as Console 60K, so the
     # exact-lock PLL is used unchanged; only the pin file and the I/O guards differ.
@@ -161,7 +182,9 @@ add_file -type verilog "src/vdp_sprite_shifter.v"
 add_file -type verilog "src/vdp_sprites.v"
 add_file -type verilog "src/video.v"
 
-if {$exact} {
+if {$exact && $dev eq "nano20k"} {
+    add_file -type sdc "src/smstang_nano_exact.sdc"
+} elseif {$exact} {
     add_file -type sdc "src/smstang_exact.sdc"
 } else {
     add_file -type sdc "src/smstang.sdc"

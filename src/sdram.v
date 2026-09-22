@@ -203,8 +203,17 @@ always @(posedge clk) begin
 
             // bank activate
             cmd <= CMD_BankActivate;
+`ifdef NANO20K
+            // Nano 20K in-package SDRAM: 2K rows x 256 columns x 4 banks, so the word
+            // address splits bank[21:20] / row[19:9] / column[8:1] -- 4 MB of 16-bit
+            // words, all of it inside A[10:0]. The 16-bit mapping below would put row
+            // bits on A[12:11], which this part does not have.
+            SDRAM_BA <= addr[req_id][21:20];
+            a <= {2'b00, addr[req_id][19:9]};
+`else
             SDRAM_BA <= addr[req_id][24:23];
             a <= addr[req_id][22:10];     
+`endif
 
             state <= wr[req_id] ? WRITE : READ;
         end else if (need_refresh & refresh_allowed) begin
@@ -221,7 +230,11 @@ always @(posedge clk) begin
         // read sequence
         {READ, T_RCD}: begin
             cmd <= CMD_Read;
+`ifdef NANO20K
+            a[12:0] <= {2'b00, 3'b100, addr_buf[8:1]};  // A10 = auto precharge, 8-bit column
+`else
             a[12:0] <= {4'b0010, addr_buf[9:1]};  // column address with auto precharge
+`endif
             SDRAM_DQM <= 2'b0;
         end
         {READ, T_RCD+CAS}: begin
@@ -243,7 +256,11 @@ always @(posedge clk) begin
         // write sequence
         {WRITE, T_RCD}: begin
             cmd <= CMD_Write;
+`ifdef NANO20K
+            a[12:0] <= {2'b00, 3'b100, addr_buf[8:1]};  // A10 = auto precharge, 8-bit column
+`else
             a[12:0] <= {4'b0010, addr_buf[9:1]};  // column address with auto precharge
+`endif
             SDRAM_DQM <= ~be_buf;     
             dq_out <= din_buf;
             dq_oen <= 1'b0;                 

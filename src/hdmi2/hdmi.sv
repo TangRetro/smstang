@@ -265,7 +265,10 @@ generate
         // VIC 2, so a sink treats it as 480p60; only the blanking differs (855x524 vs
         // 858x525), which is what makes every source line exactly two output lines.
         // sms2hdmi_sd.sv centres the picture in that window and sets the phase with vreset.
-        201:
+        // Mode 202 = mode 201's timing at 27.000 MHz instead of 26.875 (Nano 20K, whose core
+        // is 54 MHz off a 27 MHz crystal). Same geometry; only VIDEO_RATE differs, which
+        // matters because the audio clock regeneration packets are computed from it.
+        201, 202:
         begin
             assign frame_width = 855;
             assign frame_height_base = 524;
@@ -347,7 +350,8 @@ end
 // PCE PORT: mode 200 runs at 940.625/35 = 26.875 MHz. VIDEO_RATE feeds the audio clock
 // regeneration (CTS/N); getting it wrong silently detunes HDMI audio, which matters here
 // because CD-DA is half the point of this core.
-localparam real VIDEO_RATE = (VIDEO_ID_CODE == 201 ? 26.875E6
+localparam real VIDEO_RATE = (VIDEO_ID_CODE == 202 ? 27.0E6
+                            : VIDEO_ID_CODE == 201 ? 26.875E6
                             : VIDEO_ID_CODE == 200 ? 26.875E6
     : VIDEO_ID_CODE == 1 ? 25.2E6
     : VIDEO_ID_CODE == 2 || VIDEO_ID_CODE == 3 ? 27.027E6
@@ -470,11 +474,11 @@ generate
             // The VIC the AVI InfoFrame ADVERTISES, which is not always the internal mode
             // number. Mode 200 sends a standard 720x480 active area and declares VIC 2 for
             // it, which is the whole reason a sink accepts the non-standard blanking.
-            .AVI_VIC((VIDEO_ID_CODE == 200 || VIDEO_ID_CODE == 201) ? 2 : VIDEO_ID_CODE),
+            .AVI_VIC((VIDEO_ID_CODE == 200 || VIDEO_ID_CODE == 201 || VIDEO_ID_CODE == 202) ? 2 : VIDEO_ID_CODE),
             // 4:3 for the exact-lock mode only; every other mode keeps "No Data" so its
             // netlist is unchanged. Verified on hardware: a monitor on "Aspect" pillarboxes
             // mode 200 correctly with this set.
-            .PICTURE_ASPECT_RATIO((VIDEO_ID_CODE == 200 || VIDEO_ID_CODE == 201) ? 2'b01 : 2'b00)
+            .PICTURE_ASPECT_RATIO((VIDEO_ID_CODE == 200 || VIDEO_ID_CODE == 201 || VIDEO_ID_CODE == 202) ? 2'b01 : 2'b00)
         ) packet_picker (.clk_pixel(clk_pixel), .clk_audio(clk_audio), .reset(reset), .video_field_end(video_field_end), .packet_enable(packet_enable), .packet_pixel_counter(packet_pixel_counter), .audio_sample_word(audio_sample_word), .header(header), .sub(sub));
         logic [8:0] packet_data;
         packet_assembler packet_assembler (.clk_pixel(clk_pixel), .reset(reset), .data_island_period(data_island_period), .header(header), .sub(sub), .packet_data(packet_data), .counter(packet_pixel_counter));
