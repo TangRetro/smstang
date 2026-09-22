@@ -79,6 +79,20 @@ wire locked;
 assign clk_sys = clk_g;
 assign locked = 1'b1;
 `else
+`ifdef EXACT_LOCK
+// EXACT LOCK (2026-09-22): one VCO for the core, the SDRAM and the video clocks, so every
+// source line is exactly two output lines and the HDMI framebuffer is unnecessary.
+// See src/plla/pll_exact.v and src/sms2hdmi_sd.sv.
+pll_exact pll_exact_inst(
+    .clkin(clk_g),
+    .clkout0(clk_sys),          // 53.750 MHz (upstream: 53.7037)
+    .clkout1(O_sdram_clk),      // same, phase-shifted as before
+    .clkout2(clk_pixel),        // 26.875 MHz = clk_sys / 2
+    .clkout3(clk_5x_pixel),     // 134.375 MHz = clk_pixel x 5
+    .lock(locked)
+);
+assign clk27 = 1'b0;            // the 27 MHz chain exists only for the 74.25 MHz path
+`else
 pll_53 pll_53_inst(
     .clkin(clk_g),
     .clkout0(clk_sys),
@@ -94,6 +108,7 @@ pll_74 pll_74_inst(
     .clkout0(clk_pixel),
     .clkout1(clk_5x_pixel)
 );
+`endif
 `endif
 
 // clk_sys:   012345678901234567890123456789
@@ -336,6 +351,15 @@ wire [7:0] overlay_x;
 wire [7:0] overlay_y;
 wire [14:0] overlay_color;
 
+`ifdef EXACT_LOCK
+sms2hdmi_sd sms2hdmi_inst (
+	.clk(clk_sys), .resetn(1'b1),
+	.clk_pixel(clk_pixel),.clk_5x_pixel(clk_5x_pixel),
+    .ce_pix(ce_pix), .x(x), .y(y), .color(color), .audio_l(audio_l), .audio_r(audio_r),
+    .overlay(overlay), .overlay_x(overlay_x), .overlay_y(overlay_y), .overlay_color(overlay_color),
+	.tmds_clk_n(tmds_clk_n), .tmds_clk_p(tmds_clk_p), .tmds_d_n(tmds_d_n), .tmds_d_p(tmds_d_p)
+);
+`else
 sms2hdmi sms2hdmi_inst (
 	.clk(clk_sys), .resetn(1'b1),
 	.clk_pixel(clk_pixel),.clk_5x_pixel(clk_5x_pixel),
@@ -343,6 +367,7 @@ sms2hdmi sms2hdmi_inst (
     .overlay(overlay), .overlay_x(overlay_x), .overlay_y(overlay_y), .overlay_color(overlay_color),
 	.tmds_clk_n(tmds_clk_n), .tmds_clk_p(tmds_clk_p), .tmds_d_n(tmds_d_n), .tmds_d_p(tmds_d_p)
 );
+`endif
 
 wire [11:0] joy1_btns, joy2_btns;
 wire [11:0] joy1_usb, joy2_usb;
@@ -350,11 +375,19 @@ wire [11:0] joy1_mcu, joy2_mcu;
 assign joy1 = joy1_btns | joy1_usb | joy1_mcu;
 assign joy2 = joy2_btns | joy2_usb | joy2_mcu;
 
-controller_ds2 #(.FREQ(53_700_000)) joy1_ds2 (
+`ifdef EXACT_LOCK
+controller_ds2 #(.FREQ(53_750_000))
+`else
+controller_ds2 #(.FREQ(53_700_000))
+`endif joy1_ds2 (
     .clk(clk_sys), .snes_buttons(joy1_btns),
     .ds_clk(ds_clk), .ds_miso(ds_miso), .ds_mosi(ds_mosi), .ds_cs(ds_cs) 
 );
-controller_ds2 #(.FREQ(53_700_000)) joy2_ds2 (
+`ifdef EXACT_LOCK
+controller_ds2 #(.FREQ(53_750_000))
+`else
+controller_ds2 #(.FREQ(53_700_000))
+`endif joy2_ds2 (
    .clk(clk_sys), .snes_buttons(joy2_btns),
    .ds_clk(ds_clk2), .ds_miso(ds_miso2), .ds_mosi(ds_mosi2), .ds_cs(ds_cs2) 
 );

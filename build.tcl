@@ -7,13 +7,28 @@ if {$argc == 0} {
 
 set dev [lindex $argv 0]
 
+# EXACT LOCK (2026-09-22): same board as console60k, but the video clocks come off the
+# core's own VCO so every source line is exactly two output lines and the HDMI frame
+# buffer is not needed. See src/plla/pll_exact.v, src/sms2hdmi_sd.sv, hdmi2 mode 201.
+set exact 0
+if {$dev eq "console60k_exact"} {
+    set exact 1
+    set dev "console60k"
+    set_option -output_base_name smstang_console60k_exact
+}
+
 if {$dev eq "console60k"} {
     set_device GW5AT-LV60PG484AC1/I0 -device_version B
     add_file -type cst "src/boards/console.cst"
     add_file -type verilog "src/plla/pll_12.v"
-    add_file -type verilog "src/plla/pll_27.v"
-    add_file -type verilog "src/plla/pll_53.v"
-    add_file -type verilog "src/plla/pll_74.v"
+    if {$exact} {
+        add_file -type verilog "src/config_exact.v"
+        add_file -type verilog "src/plla/pll_exact.v"
+    } else {
+        add_file -type verilog "src/plla/pll_27.v"
+        add_file -type verilog "src/plla/pll_53.v"
+        add_file -type verilog "src/plla/pll_74.v"
+    }
 } elseif {$dev eq "console138k"} {
     set_device GW5AST-LV138PG484AC1/I0 -device_version B
     add_file -type cst "src/boards/console.cst"
@@ -24,7 +39,7 @@ if {$dev eq "console60k"} {
 } else {
     error "Unknown device $dev"
 }
-set_option -output_base_name smstang_${dev}
+if {!$exact} { set_option -output_base_name smstang_${dev} }
 
 add_file -type verilog "src/MC8123.v"
 add_file -type verilog "src/SEGASYS1_PRGDEC.v"
@@ -96,7 +111,11 @@ add_file -type verilog "src/jt89/jt89_vol.v"
 add_file -type verilog "src/lightgun.sv"
 add_file -type verilog "src/parts.v"
 add_file -type verilog "src/sdram.v"
-add_file -type verilog "src/sms2hdmi.sv"
+if {$exact} {
+    add_file -type verilog "src/sms2hdmi_sd.sv"
+} else {
+    add_file -type verilog "src/sms2hdmi.sv"
+}
 add_file -type verilog "src/smstang_top.sv"
 add_file -type verilog "src/spram.v"
 add_file -type verilog "src/sprom.v"
@@ -116,7 +135,11 @@ add_file -type verilog "src/vdp_sprite_shifter.v"
 add_file -type verilog "src/vdp_sprites.v"
 add_file -type verilog "src/video.v"
 
-add_file -type sdc "src/smstang.sdc"
+if {$exact} {
+    add_file -type sdc "src/smstang_exact.sdc"
+} else {
+    add_file -type sdc "src/smstang.sdc"
+}
 
 set_option -synthesis_tool gowinsynthesis
 set_option -top_module smstang_top
