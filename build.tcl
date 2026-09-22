@@ -16,6 +16,11 @@ if {$dev eq "console60k_exact"} {
     set dev "console60k"
     set_option -output_base_name smstang_console60k_exact
 }
+if {$dev eq "primer25k_exact"} {
+    set exact 1
+    set dev "primer25k"
+    set_option -output_base_name smstang_primer25k_exact
+}
 
 if {$dev eq "console60k"} {
     set_device GW5AT-LV60PG484AC1/I0 -device_version B
@@ -29,6 +34,27 @@ if {$dev eq "console60k"} {
         add_file -type verilog "src/plla/pll_53.v"
         add_file -type verilog "src/plla/pll_74.v"
     }
+} elseif {$dev eq "primer25k"} {
+    # Primer 25K (GW5A-25A). Same family and the same 50 MHz crystal as Console 60K, so the
+    # exact-lock PLL is used unchanged; only the pin file and the I/O guards differ.
+    # EXACT LOCK ONLY: the stock video path needs 77 BSRAM blocks and this device has 56.
+    if {!$exact} { error "primer25k has 56 BSRAM; the stock video path needs 77. Use primer25k_exact." }
+    set_device GW5A-LV25MG121NC1/I0 -device_version A
+    add_file -type verilog "src/boards/primer25k.v"
+    add_file -type cst "src/boards/primer25k.cst"
+    add_file -type verilog "src/plla/pll_12.v"
+    add_file -type verilog "src/config_exact.v"
+    add_file -type verilog "src/plla/pll_exact.v"
+    # This package has 68 regular I/O and the design needs more, so the dual-purpose pins
+    # are freed as GPIO -- the same set pcetang uses on this board. Without these, the
+    # crystal and part of the SDRAM bus land on dedicated pins and placement fails.
+    set_option -use_mspi_as_gpio 1
+    set_option -use_sspi_as_gpio 1
+    set_option -use_done_as_gpio 1
+    set_option -use_cpu_as_gpio 1
+    set_option -use_ready_as_gpio 1
+    set_option -use_i2c_as_gpio 1
+    set_option -use_jtag_as_gpio 1
 } elseif {$dev eq "console138k"} {
     set_device GW5AST-LV138PG484AC1/I0 -device_version B
     add_file -type cst "src/boards/console.cst"

@@ -11,7 +11,14 @@ module smstang_top(
 	input UART_RXD,
 	output UART_TXD,
 
+`ifdef PRIMER25K
+    // Primer 25K carries two LEDs, not eight, and no second USB port; O_sdram_cke is tied
+    // high on that board's SDRAM PMOD so the core does not drive it. Pins are the real
+    // constraint on this package (68 regular I/O), so nothing unused is brought out.
+    output [1:0] led,
+`else
     output [7:0] led,
+`endif
 
     // dualshock controller
     output ds_clk,
@@ -26,12 +33,16 @@ module smstang_top(
     // USB1 and USB2
     inout usb1_dp,
     inout usb1_dn,
+`ifndef PRIMER25K
     inout usb2_dp,
     inout usb2_dn,
+`endif
 
 	// SDRAM
     output O_sdram_clk,
+`ifndef PRIMER25K
     output O_sdram_cke,
+`endif
     output O_sdram_cs_n,            // chip select
     output O_sdram_cas_n,           // columns address select
     output O_sdram_ras_n,           // row address select
@@ -402,13 +413,22 @@ usb_hid_host usb_hid_host (
     .usb_dm(usb1_dn), .usb_dp(usb1_dp),
     .game_snes(joy1_usb), .typ(usb_type), .conerr(usb_conerr)
 );
+`ifdef PRIMER25K
+assign joy2_usb = 12'b0;            // Primer 25K brings out one USB port, not two
+`else
 usb_hid_host usb_hid_host2 (
     .usbclk(clk12), .usbrst_n(pll_lock_12),
     .usb_dm(usb2_dn), .usb_dp(usb2_dp),
     .game_snes(joy2_usb)
 );
+`endif
 
+`ifdef PRIMER25K
+wire O_sdram_cke;                   // tied high on the board, kept so sdram.v still drives it
+assign led = ~{usb_type[0], usb_conerr};
+`else
 assign led = ~{joy1[4:0], usb_type, usb_conerr};
+`endif
 
 iosys_bl616 #(.COLOR_LOGO(15'b11111_00000_00000), .FREQ(53_700_000), .CORE_ID(5) )     // deep blue smstang logo
     sys_inst (
