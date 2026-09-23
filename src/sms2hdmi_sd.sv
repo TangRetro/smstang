@@ -92,49 +92,55 @@ reg [8:0]  y_r    = 9'd0;
 always @(posedge clk) begin
     y_r <= y;
     if (ce_pix) begin
-        if (y != y_r)                       // new source line: rotate the write buffer
-            wr_sel <= (wr_sel == N_LINE_BUF-1) ? 2'd0 : wr_sel + 2'd1;
+        // New source line: rotate the write buffer, and restart at buffer 0 on source line
+        // 0 so that line s always lands in buffer s mod 3. Without the restart the phase
+        // slips by 262 mod 3 = 1 buffer every frame against the read side, which restarts
+        // at 0 every frame too.
+        if (y != y_r)
+            wr_sel <= (y == 9'd0 || wr_sel == N_LINE_BUF-1) ? 2'd0 : wr_sel + 2'd1;
         if (y < SRC_H && x != 0 && x <= SRC_W)
             linebuf[{wr_sel, x[7:0] - 8'd1}] <= color;
     end
 end
 
 // ---------------------------------------------------------------------------------------
-// Frame phase. The source's first active line must land on a known output line, and under
-// an exact lock that only has to be arranged ONCE: after that the two rasters cannot
-// drift. A single `vreset` pulse slams the HDMI raster counters to 0,0 at the moment the
-// source starts a new frame. It is NOT hdmi.sv's `reset` -- that one fans out to the
-// serializer on the 134 MHz clock and costs real timing margin (learned the hard way in
-// pcetang); `vreset` touches cx/cy only.
+// Frame phase. Under an exact lock the output raster cannot drift against the source, so
+// the phase only has to be set, not servoed. A `vreset` pulse loads the HDMI raster at the
+// moment the source starts line 0, with cy = YSTART - 2: source line s then starts at output
+// line YSTART + 2s - 2 and is displayed on YSTART + 2s and YSTART + 2s + 1, i.e. exactly one
+// source line after it was written. The writer is then filling buffer (s+1) mod 3 and
+// cannot touch buffer s mod 3 until line s+3, after the display is done with it.
+// (Loading cy = 0 instead, as the first version did, displays line s 24 source lines late,
+// in the buffer the writer is filling at that moment.)
 //
-// Armed at power-up and re-armed if the source ever restarts its frame count from a
-// different place, which is what a mode change or a reset looks like from here.
+// It is NOT hdmi.sv's `reset` -- that one fans out to the serializer on the 134 MHz clock
+// and costs real timing margin (learned the hard way in pcetang); `vreset` touches cx/cy
+// only. It fires at power-up and again ONLY when a source frame starts somewhere other than
+// where the lock puts it -- a console reset or game load restarts the VDP counters.
+// The window absorbs the few clocks of the crossing.
 // ---------------------------------------------------------------------------------------
-reg  frame_start   = 1'b0;      // core clock, one pulse at the top of a source frame
-reg  frame_start_x = 1'b0;      // crossed into the pixel domain
+localparam [9:0] VRESET_CY = YSTART - 2;
+localparam [9:0] V_TOTAL   = 524;
+localparam [10:0] H_TOTAL  = 855;
+
+reg  frame_start_x = 1'b0;      // toggle in the core domain, survives the clock crossing
 reg  fs_meta       = 1'b0;
 reg  fs_sync       = 1'b0;
 reg  fs_sync_r     = 1'b0;
-reg  phase_armed   = 1'b1;
 reg  vreset        = 1'b0;
 
 always @(posedge clk) begin
-    frame_start <= 1'b0;
-    if (ce_pix && y == 9'd0 && y_r != 9'd0) begin
-        frame_start   <= 1'b1;
-        frame_start_x <= ~frame_start_x;    // toggle: survives the clock crossing
-    end
+    if (ce_pix && y == 9'd0 && y_r != 9'd0)
+        frame_start_x <= ~frame_start_x;
 end
+
+wire in_phase = (cy == VRESET_CY && cx < 11'd16) || (cy == VRESET_CY - 10'd1 && cx >= H_TOTAL - 11'd16);
 
 always @(posedge clk_pixel) begin
     fs_meta   <= frame_start_x;
     fs_sync   <= fs_meta;
     fs_sync_r <= fs_sync;
-    vreset    <= 1'b0;
-    if (phase_armed && (fs_sync != fs_sync_r)) begin
-        vreset      <= 1'b1;
-        phase_armed <= 1'b0;
-    end
+    vreset    <= (fs_sync != fs_sync_r) && !in_phase;
 end
 
 // ---------------------------------------------------------------------------------------
@@ -165,7 +171,9 @@ always @(posedge clk_pixel) begin
     // src_line mod 3 without a divider: the line index only ever advances by one.
     if (cx == 0) begin
         if (cy == ytop)                 rd_sel <= 2'd0;
-        else if (v_in && cy[0] == 1'b1) rd_sel <= (rd_sel == N_LINE_BUF-1) ? 2'd0 : rd_sel + 2'd1;
+        // advance on the FIRST output line of each pair (same parity as ytop), so source
+        // line s occupies output lines ytop+2s and ytop+2s+1
+        else if (v_in && cy[0] == ytop[0]) rd_sel <= (rd_sel == N_LINE_BUF-1) ? 2'd0 : rd_sel + 2'd1;
     end
 end
 
@@ -243,6 +251,7 @@ hdmi( .clk_pixel_x5(clk_5x_pixel),
         .rgb(rgb),
         .reset(1'b0),
         .vreset(vreset),
+        .vreset_cy(VRESET_CY),
         .audio_sample_word(audio_sample_word),
         .tmds(tmds),
         .tmds_clock(tmdsClk),
