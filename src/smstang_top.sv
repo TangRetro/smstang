@@ -205,6 +205,7 @@ reg        cart_sz512;
 reg reset /* verilator public */ = 1;
 
 wire mask_column;
+wire [7:0] vcounter_cpu;          // CPU-visible V counter, video.v -> VDPs
 wire smode_M1, smode_M2, smode_M3;
 wire pal  /* verilator public */ = status[2];
 wire border = status[13] & ~gg;
@@ -284,7 +285,7 @@ system #(63) system
 	.has_pedal(SYSMODE[0][3]), .has_paddle(SYSMODE[0][2]), .paddle(),
 	.paddle2(), .pedal(),
 
-	.x(x), .y(y), .color(color),
+	.x(x), .y(y), .vcounter_cpu(vcounter_cpu), .color(color),
 	.palettemode(palettemode), .mask_column(mask_column), .black_column(status[28] && ~status[13]),
 	.smode_M1(smode_M1), .smode_M2(smode_M2), .smode_M3(smode_M3),
 	.ysj_quirk(/*ysj_quirk*/), .pal(pal), .region(status[10]),
@@ -320,6 +321,7 @@ video video
 	.smode_M3(smode_M3),
 	.x(x),
 	.y(y),
+	.vcounter_cpu(vcounter_cpu),
 	.hsync(HS),
 	.vsync(VS),
 	.hblank(HBlank),

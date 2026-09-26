@@ -1,5 +1,5 @@
 
-module video(clk, ce_pix, pal, border, ggres, mask_column, cut_mask, smode_M1, smode_M3, x, y, hsync, vsync, hblank, vblank);
+module video(clk, ce_pix, pal, border, ggres, mask_column, cut_mask, smode_M1, smode_M3, x, y, vcounter_cpu, hsync, vsync, hblank, vblank);
    input        clk;
    input        ce_pix;
    input        pal;
@@ -91,6 +91,27 @@ module video(clk, ce_pix, pal, border, ggres, mask_column, cut_mask, smode_M1, s
       end 
    end 
    
+   // MiSTer 82b3c15: the V counter the CPU reads advances two pixel ticks before the
+   // internal line counter (which moves at hcount=487); VDPTest accepts 484/485 and
+   // rejects 486. The raster itself (vcount/y) is untouched -- the HDMI exact lock
+   // depends on it.
+   output [7:0] vcounter_cpu;
+   reg    [8:0] vcounter_cpu_reg = 9'd0;
+   assign vcounter_cpu = vcounter_cpu_reg[7:0];
+   always @(posedge clk) begin
+      if (ce_pix && hcount == 9'd485) begin
+         if (pal) begin
+            if (smode_M1)      vcounter_cpu_reg <= (vcount == 9'd258) ? 9'd458 : vcount + 9'd1;
+            else if (smode_M3) vcounter_cpu_reg <= (vcount == 9'd266) ? 9'd482 : vcount + 9'd1;
+            else               vcounter_cpu_reg <= (vcount == 9'd242) ? 9'd442 : vcount + 9'd1;
+         end else begin
+            if (smode_M1)      vcounter_cpu_reg <= (vcount == 9'd234) ? 9'd485 : vcount + 9'd1;
+            else if (smode_M3) vcounter_cpu_reg <= (vcount == 9'd261) ? 9'd0   : vcount + 9'd1;
+            else               vcounter_cpu_reg <= (vcount == 9'd218) ? 9'd469 : vcount + 9'd1;
+         end
+      end
+   end
+
    assign x = hcount;
    assign y = vcount;
    

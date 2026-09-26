@@ -1,5 +1,5 @@
 
-module vdp(clk_sys, ce_vdp, ce_pix, ce_sp, gg, ggres, se_bank, sp64, HL, RD_n, WR_n, IRQ_n, WR_direct, A_direct, A, D_in, D_out, x, y, color, palettemode, y1, mask_column, black_column, smode_M1, smode_M2, smode_M3, smode_M4, ysj_quirk, reset_n);
+module vdp(clk_sys, ce_vdp, ce_pix, ce_sp, gg, ggres, se_bank, sp64, HL, RD_n, WR_n, IRQ_n, WR_direct, A_direct, A, D_in, D_out, x, y, vcounter_cpu, color, palettemode, y1, mask_column, black_column, smode_M1, smode_M2, smode_M3, smode_M4, ysj_quirk, reset_n);
    parameter     MAX_SPPL = 7;
    input         clk_sys;
    input         ce_vdp;
@@ -19,6 +19,7 @@ module vdp(clk_sys, ce_vdp, ce_pix, ce_sp, gg, ggres, se_bank, sp64, HL, RD_n, W
    input [7:0]   D_in;
    output reg [7:0] D_out;
    input [8:0]   x;
+   input [7:0]   vcounter_cpu;   // CPU-visible V counter (MiSTer 82b3c15)
    input [8:0]   y;
    output [11:0] color;
    input         palettemode;
@@ -76,6 +77,9 @@ module vdp(clk_sys, ce_vdp, ce_pix, ce_sp, gg, ggres, se_bank, sp64, HL, RD_n, W
    reg [2:0]     m2mg_address;
    reg [7:0]     m2ct_address = 8'hFF;
    reg [7:0]     bg_scroll_x;
+   // MiSTer 82c679b: R8 (X scroll) is latched at x=487 so the background pipeline sees one
+   // stable value per line (matches the real VDP, passes VDPTest's X-scroll latch timing).
+   reg [7:0]     bg_scroll_x_latched;
    reg [7:0]     bg_scroll_y;
    reg [6:0]     spr_address;
    reg           spr_shift;
@@ -120,7 +124,7 @@ module vdp(clk_sys, ce_vdp, ce_pix, ce_sp, gg, ggres, se_bank, sp64, HL, RD_n, W
       .smode_M1(xmode_M1), .smode_M3(xmode_M3), .smode_M4(xmode_M4),
       .ysj_quirk(ysj_quirk), .display_on(display_on), .mask_column0(mask_column0),
       .black_column(black_column), .overscan(overscan), .bg_address(bg_address),
-      .m2mg_address(m2mg_address), .m2ct_address(m2ct_address), .bg_scroll_x(bg_scroll_x),
+      .m2mg_address(m2mg_address), .m2ct_address(m2ct_address), .bg_scroll_x(bg_scroll_x_latched),
       .bg_scroll_y(bg_scroll_y), .disable_hscroll(disable_hscroll), .disable_vscroll(disable_vscroll),
       .spr_address(spr_address), .spr_high_bits(spr_high_bits), .spr_shift(spr_shift),
       .spr_tall(spr_tall), .spr_wide(spr_wide), .spr_collide(spr_collide),
@@ -261,7 +265,7 @@ module vdp(clk_sys, ce_vdp, ce_pix, ce_sp, gg, ggres, se_bank, sp64, HL, RD_n, W
             end else if (old_RD_n & RD_n == 1'b0)
                case ({A[7:6], A[0]})
                   3'b010 :		// VCounter
-                     D_out <= y[7:0];
+                     D_out <= vcounter_cpu;
                   3'b011 :		// HCounter
                      D_out <= latched_x;
                   3'b100 :		// Data port
@@ -367,5 +371,12 @@ module vdp(clk_sys, ce_vdp, ce_pix, ce_sp, gg, ggres, se_bank, sp64, HL, RD_n, W
       end 
    end 
    
+   always @(posedge clk_sys or negedge reset_n) begin
+      if (reset_n == 1'b0)
+         bg_scroll_x_latched <= 8'd0;
+      else if (ce_pix && x == 9'd487)
+         bg_scroll_x_latched <= bg_scroll_x;
+   end
+
 endmodule
 

@@ -17,6 +17,7 @@ module vpd_sprite_shifter(clk_sys, ce_pix, x, spr_x, load, x248, x224, m4, wide_
    output reg   active;
    
    reg          wideclock;
+   wire [7:0]   x_plus8 = x + 8'd8;      // 8-bit, wraps like the VHDL original
    reg [7:0]    shift0;
    reg [7:0]    shift1;
    reg [7:0]    shift2;
@@ -24,8 +25,11 @@ module vpd_sprite_shifter(clk_sys, ce_pix, x, spr_x, load, x248, x224, m4, wide_
    
    always @(posedge clk_sys) begin
       if (ce_pix) begin
+         // MiSTer 440b6aa + 5756dfe: the shifted-mode compare is 8-bit (as in the VHDL),
+         // and spr_x=0xFF (VDP sprite X=0, stored as X-1) must not wrap onto the right
+         // edge through it -- that sprite is fully off-screen after the 8-pixel shift.
          if (  (spr_x == x & (load & (m4 | spr_d3[7] == 1'b0) | x224 & spr_d3[7])) 
-             | (spr_x == x + 8 & x248)) begin
+             | ((spr_x == x_plus8) & x248 & (spr_x != 8'hFF))) begin
             shift0 <= spr_d0;
             shift1 <= spr_d1;
             shift2 <= spr_d2;

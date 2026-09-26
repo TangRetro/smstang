@@ -1,5 +1,5 @@
 
-module system(clk_sys, ce_cpu, ce_vdp, ce_pix, ce_sp, turbo, gg, ggres, systeme, bios_en, GG_EN, GG_CODE, GG_RESET, GG_AVAIL, RESET_n, rom_rd, rom_a, rom_do, j1_up, j1_down, j1_left, j1_right, j1_tl, j1_tr, j1_th, j1_start, j1_coin, j1_a3, j2_up, j2_down, j2_left, j2_right, j2_tl, j2_tr, j2_th, j2_start, j2_coin, j2_a3, pause, E0Type, E1Use, E2Use, E0, F2, F3, has_paddle, has_pedal, paddle, paddle2, pedal, j1_tr_out, j1_th_out, j2_tr_out, j2_th_out, x, y, color, palettemode, mask_column, black_column, smode_M1, smode_M2, smode_M3, ysj_quirk, pal, region, mapper_lock, vdp_enables, psg_enables, audioL, audioR, fm_ena, dbr, sp64, ram_a, ram_d, ram_we, ram_q, nvram_a, nvram_d, nvram_we, nvram_q, encrypt, key_a, key_d, ROMCL, ROMAD, ROMDT, ROMEN);
+module system(clk_sys, ce_cpu, ce_vdp, ce_pix, ce_sp, turbo, gg, ggres, systeme, bios_en, GG_EN, GG_CODE, GG_RESET, GG_AVAIL, RESET_n, rom_rd, rom_a, rom_do, j1_up, j1_down, j1_left, j1_right, j1_tl, j1_tr, j1_th, j1_start, j1_coin, j1_a3, j2_up, j2_down, j2_left, j2_right, j2_tl, j2_tr, j2_th, j2_start, j2_coin, j2_a3, pause, E0Type, E1Use, E2Use, E0, F2, F3, has_paddle, has_pedal, paddle, paddle2, pedal, j1_tr_out, j1_th_out, j2_tr_out, j2_th_out, x, y, vcounter_cpu, color, palettemode, mask_column, black_column, smode_M1, smode_M2, smode_M3, ysj_quirk, pal, region, mapper_lock, vdp_enables, psg_enables, audioL, audioR, fm_ena, dbr, sp64, ram_a, ram_d, ram_we, ram_q, nvram_a, nvram_d, nvram_we, nvram_q, encrypt, key_a, key_d, ROMCL, ROMAD, ROMDT, ROMEN);
    parameter          MAX_SPPL = 7;
    parameter [32*8:1] BASE_DIR = "";
    input              clk_sys;
@@ -67,6 +67,7 @@ module system(clk_sys, ce_cpu, ce_vdp, ce_pix, ce_sp, turbo, gg, ggres, systeme,
    
    input [8:0]        x;
    input [8:0]        y;
+   input [7:0]        vcounter_cpu;   // CPU-visible V counter (MiSTer 82b3c15), from video.v
    output [11:0]      color;
    input              palettemode;
    output             mask_column;
@@ -270,6 +271,7 @@ module system(clk_sys, ce_cpu, ce_vdp, ce_pix, ce_sp, turbo, gg, ggres, systeme,
       .D_out(vdp_D_out), 
       .x(x), 
       .y(y), 
+      .vcounter_cpu(vcounter_cpu), 
       .color(vdp_color), 
       .palettemode(palettemode), 
       .smode_M1(smode_M1), 
@@ -300,6 +302,7 @@ module system(clk_sys, ce_cpu, ce_vdp, ce_pix, ce_sp, turbo, gg, ggres, systeme,
       .D_out(vdp2_D_out),
       .x(x),
       .y(y),
+      .vcounter_cpu(vcounter_cpu),
       .color(vdp2_color),
       .palettemode(palettemode),
       .y1(vdp2_y1),
