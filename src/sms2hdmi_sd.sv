@@ -38,6 +38,11 @@ module sms2hdmi_sd #(
     input [8:0] x,
     input [8:0] y,
     input [11:0] color,         // BGR444
+    // VDP height select (Mode 4): M1 = 224 lines, M3 = 240 lines, neither = 192. The frame
+    // is 262 lines in all three (video.v), so the exact lock does not change -- only
+    // which lines are active.
+    input smode_M1,
+    input smode_M3,
 
     input [15:0] audio_l,
     input [15:0] audio_r,
@@ -63,11 +68,10 @@ localparam AUDIO_BIT_WIDTH = 16;
 localparam AUDIO_RATE = 48000;
 
 localparam SRC_W      = 256;        // active source pixels per line
-localparam SRC_H      = 192;        // active source lines
+localparam SRC_H      = 240;        // most active source lines (Mode 4 240-line)
 localparam OVL_H      = 224;        // the overlay is taller than the picture
 localparam DST_W      = 576;        // 256 -> 576 keeps 4:3 inside the 720x480 window
 localparam XSTART     = (720 - DST_W) / 2;          // 72
-localparam YSTART     = (480 - SRC_H * 2) / 2;      // 48
 localparam OVL_YSTART = (480 - OVL_H * 2) / 2;      // 16
 
 wire [9:0]  cy;
@@ -86,19 +90,25 @@ localparam int N_LINE_BUF = 3;
 
 reg [11:0] linebuf [0:N_LINE_BUF*SRC_W-1];
 reg [1:0]  wr_sel = 2'd0;                   // buffer the core is filling
+
+// Active height, 192 / 224 / 240. Core-domain copy for the write side; the pixel domain
+// uses a synchronised copy (the mode bits only change when the game rewrites VDP
+// registers, and a change moves YSTART, which re-fires vreset below).
+wire [8:0] src_h_core = smode_M1 ? 9'd224 : smode_M3 ? 9'd240 : 9'd192;
 reg [8:0]  y_r    = 9'd0;
 
 // Write side, core clock. The VDP emits a line's pixels at x = 1..256.
 always @(posedge clk) begin
     y_r <= y;
+    // New source line: rotate the write buffer, and restart at buffer 0 on source line 0
+    // so that line s always lands in buffer s mod 3 (262 mod 3 = 1, so without the
+    // restart the phase slips one buffer per frame). Checked EVERY clock: y changes on a
+    // ce_pix edge and y_r follows one clock later, so a check gated by ce_pix never sees
+    // the difference (the first hardware build never rotated -- that was the bug).
+    if (y != y_r)
+        wr_sel <= (y == 9'd0 || wr_sel == N_LINE_BUF-1) ? 2'd0 : wr_sel + 2'd1;
     if (ce_pix) begin
-        // New source line: rotate the write buffer, and restart at buffer 0 on source line
-        // 0 so that line s always lands in buffer s mod 3. Without the restart the phase
-        // slips by 262 mod 3 = 1 buffer every frame against the read side, which restarts
-        // at 0 every frame too.
-        if (y != y_r)
-            wr_sel <= (y == 9'd0 || wr_sel == N_LINE_BUF-1) ? 2'd0 : wr_sel + 2'd1;
-        if (y < SRC_H && x != 0 && x <= SRC_W)
+        if (y < src_h_core && x != 0 && x <= SRC_W)
             linebuf[{wr_sel, x[7:0] - 8'd1}] <= color;
     end
 end
@@ -119,8 +129,18 @@ end
 // where the lock puts it -- a console reset or game load restarts the VDP counters.
 // The window absorbs the few clocks of the crossing.
 // ---------------------------------------------------------------------------------------
-localparam [9:0] VRESET_CY = YSTART - 2;
 localparam [9:0] V_TOTAL   = 524;
+// Height in the pixel domain, and the picture's first output line (48 / 16 / 0).
+reg  [1:0] hm_meta = 2'b00, hm_sync = 2'b00;
+always @(posedge clk_pixel) begin
+    hm_meta <= {smode_M3, smode_M1};
+    hm_sync <= hm_meta;
+end
+wire [9:0] src_h_pix = hm_sync[0] ? 10'd224 : hm_sync[1] ? 10'd240 : 10'd192;
+wire [9:0] YSTART    = (10'd480 - {src_h_pix[8:0], 1'b0}) >> 1;
+// cy = YSTART - 2, modulo the frame (YSTART = 0 for 240 lines -> 522).
+wire [9:0] VRESET_CY    = (YSTART >= 10'd2) ? YSTART - 10'd2 : YSTART + V_TOTAL - 10'd2;
+wire [9:0] VRESET_CY_M1 = (VRESET_CY == 10'd0) ? V_TOTAL - 10'd1 : VRESET_CY - 10'd1;
 localparam [10:0] H_TOTAL  = 855;
 
 reg  frame_start_x = 1'b0;      // toggle in the core domain, survives the clock crossing
@@ -130,11 +150,11 @@ reg  fs_sync_r     = 1'b0;
 reg  vreset        = 1'b0;
 
 always @(posedge clk) begin
-    if (ce_pix && y == 9'd0 && y_r != 9'd0)
+    if (y == 9'd0 && y_r != 9'd0)       // every clock, for the same reason as wr_sel
         frame_start_x <= ~frame_start_x;
 end
 
-wire in_phase = (cy == VRESET_CY && cx < 11'd16) || (cy == VRESET_CY - 10'd1 && cx >= H_TOTAL - 11'd16);
+wire in_phase = (cy == VRESET_CY && cx < 11'd16) || (cy == VRESET_CY_M1 && cx >= H_TOTAL - 11'd16);
 
 always @(posedge clk_pixel) begin
     fs_meta   <= frame_start_x;
@@ -149,8 +169,8 @@ end
 // pixels across the 576-pixel window, the same arrangement sms2hdmi.sv already used for
 // its 256 -> 960 scale.
 // ---------------------------------------------------------------------------------------
-wire [9:0]  ytop    = overlay ? OVL_YSTART[9:0] : YSTART[9:0];
-wire [9:0]  yheight = overlay ? (OVL_H*2) : (SRC_H*2);
+wire [9:0]  ytop    = overlay ? OVL_YSTART[9:0] : YSTART;
+wire [9:0]  yheight = overlay ? (OVL_H*2) : {src_h_pix[8:0], 1'b0};
 wire        v_in    = (cy >= ytop) && (cy < ytop + yheight);
 wire        h_in    = (cx >= XSTART) && (cx < XSTART + DST_W);
 

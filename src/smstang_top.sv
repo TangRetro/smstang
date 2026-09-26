@@ -266,7 +266,13 @@ system #(63) system
 
 	.j2_up(~joy2[4]), .j2_down(~joy2[5]), .j2_left(~joy2[6]),
 	.j2_right(~joy2[7]), .j2_tl(~joy2[0] & ~joy2[3]), .j2_tr(~joy2[8]),
-	.j2_th(joyb_th), .pause(joy1[6]&joy2[6]), .j2_start(swap ? ~joy1[11] : ~joy2[11]),
+	.j2_th(joyb_th),
+	// Pause is the Z80 NMI, active low (system.v: NMI_n(pause | gg)). MiSTer's
+	// joy1[6]&joy2[6] assumes active-low pads with bit 6 = Pause; here pads are
+	// active-high SNES layout, bit 6 = D-pad Left, so the copy fired NMI on releasing
+	// Left on both pads. START stays button 1 (upstream's choice), so Pause = SELECT on
+	// either pad.
+	.pause(~(joy1[2] | joy2[2])), .j2_start(swap ? ~joy1[11] : ~joy2[11]),
 	.j2_coin(swap ? ~joy1[10] : ~joy2[10]), .j2_a3(swap ? ~joy1[8] : ~joy2[8]),
 
 	.j1_tr_out(joya_tr_out), .j1_th_out(joya_th_out), .j2_tr_out(joyb_tr_out),
@@ -422,6 +428,7 @@ sms2hdmi_sd sms2hdmi_inst (
 	.clk(clk_sys), .resetn(1'b1),
 	.clk_pixel(clk_pixel),.clk_5x_pixel(clk_5x_pixel),
     .ce_pix(ce_pix), .x(x), .y(y), .color(color), .audio_l(audio_l), .audio_r(audio_r),
+    .smode_M1(smode_M1), .smode_M3(smode_M3),
     .overlay(overlay), .overlay_x(overlay_x), .overlay_y(overlay_y), .overlay_color(overlay_color),
 	.tmds_clk_n(tmds_clk_n), .tmds_clk_p(tmds_clk_p), .tmds_d_n(tmds_d_n), .tmds_d_p(tmds_d_p)
 );
