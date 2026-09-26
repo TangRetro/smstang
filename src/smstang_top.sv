@@ -247,6 +247,14 @@ reg [7:0] SYSMODE[1];
 reg [7:0] DSW[3];
 
 
+// ROM loader signals (declared before the system instance, which taps the download stream)
+`ifndef VERILATOR
+wire rom_loading;
+wire rom_do_valid;
+wire [7:0] rom_do;
+`endif
+reg [23:0] loading_addr_next;
+
 system #(63) system
 (
 	.clk_sys(clk_sys), .ce_cpu(ce_cpu), .ce_vdp(ce_vdp),
@@ -303,8 +311,10 @@ system #(63) system
 
 	.encrypt(SYSMODE[0][1:0]), .key_a(/*(key_a)*/), .key_d(/*(key_d)*/),
 
-	.ROMCL(clk_sys), .ROMAD(/*ioctl_addr*/), .ROMDT(/*ioctl_dout*/),
-	.ROMEN(/*ioctl_wr & ioctl_index==0*/)
+	// ROM download stream for MiSTer's mapper_detect (header/CRC/opcode scans) and
+	// SEGASYS1_DECT2: one byte per rom_do_valid while loading, at loading_addr_next.
+	.ROMCL(clk_sys), .ROMAD({1'b0, loading_addr_next}), .ROMDT(rom_do),
+	.ROMEN(rom_loading & rom_do_valid)
 );
 
 wire HBlank, VBlank;
@@ -330,13 +340,7 @@ video video
 
 ////////////////// Memories //////////////////
 
-`ifndef VERILATOR
-wire rom_loading;
-wire rom_do_valid;
-wire [7:0] rom_do;
-`endif
-
-reg [23:0] loading_addr_next, loading_addr;
+reg [23:0] loading_addr;
 reg loading_req;
 reg [7:0] loading_data;
 

@@ -155,10 +155,11 @@ module system(clk_sys, ce_cpu, ce_vdp, ce_pix, ce_sp, turbo, gg, ggres, systeme,
    wire [7:0]         irom_D_out;
    wire               irom_RD_n;
    
-   reg [7:0]          bank0;
-   reg [7:0]          bank1;
-   reg [7:0]          bank2;
-   reg [7:0]          bank3;
+   // Mapper state now comes from MiSTer's mapper_detect / mapper_ctrl (SMS_MiSTer 2026).
+   wire [7:0]         bank0;
+   wire [7:0]         bank1;
+   wire [7:0]         bank2;
+   wire [7:0]         bank3;
    
    wire               vdp_se_bank;
    wire               vdp2_se_bank;
@@ -197,15 +198,30 @@ module system(clk_sys, ce_cpu, ce_vdp, ce_pix, ce_sp, turbo, gg, ggres, systeme,
    wire               TH_Bin;
    
    wire               nvram_WR;
-   reg                nvram_e;
-   reg                nvram_ex;
-   reg                nvram_p;
-   reg                nvram_cme;		// codemasters ram extension
+   wire               nvram_e;
+   wire               nvram_ex;
+   wire               nvram_p;
+   wire               nvram_cme;		// codemasters ram extension
    wire [7:0]         nvram_D_out;
    
-   reg                lock_mapper_B;
-   reg                mapper_codies;		// Ernie Els Golf mapper
-   reg                mapper_codies_lock;
+   wire               lock_mapper_B;
+   wire               mapper_codies;		// Ernie Els Golf mapper
+   wire               mapper_codies_lock;
+
+   // mapper_detect / mapper_ctrl outputs
+   wire               mapper_manual_force, sega_mapper_write_seen;
+   wire [7:0]         rom_size_pages;
+   wire [31:0]        rom_crc32;
+   wire               detect_zemina_static, detect_codies_static, detect_castle, detect_dahjee_a;
+   wire               detect_linear, detect_wonderkid, detect_sega_locked;
+   wire               mapper_janggun, mapper_castle, mapper_nemesis_auto, mapper_wonderkid;
+   wire               mapper_linear, mapper_sega_locked, mapper_dahjee_a, mapper_eeprom, use_zem;
+   wire [5:0]         jang_bank1, jang_bank2, jang_bank3, jang_bank4;
+   wire               jang_rev1, jang_rev2, jang_rev3, jang_rev4;
+   wire               mapper_4pak;
+   wire [7:0]         pak4_reg2, nem_bank0;
+   wire               eeprom_soft_reset;
+   wire               janggun_reverse_active;
    
    reg                mapper_msx_check0;
    reg                mapper_msx_check1;
@@ -411,7 +427,12 @@ module system(clk_sys, ce_cpu, ce_vdp, ce_pix, ce_sp, turbo, gg, ggres, systeme,
    assign ram_d = D_in;
    assign ram_D_out = ram_q;
    
-   assign nvram_a = {(nvram_p & (~A[14])), A[13:0]};
+   // MiSTer 2026: The Castle maps 32 KB of cart RAM, Dahjee Type A 8 KB at $2000.
+   assign nvram_a = mapper_castle   ? A[14:0] :
+                    mapper_dahjee_a ? {2'b00, A[12:0]} :
+                                      {(nvram_p & (~A[14])), A[13:0]};
+   wire   castle_ram = mapper_castle & A[15];            // $8000-$FFFF
+   wire   dahjee_ram = mapper_dahjee_a & (A[15:13] == 3'b001);
    assign nvram_we = nvram_WR;
    assign nvram_d = D_in;
    assign nvram_D_out = nvram_q;
@@ -447,8 +468,9 @@ module system(clk_sys, ce_cpu, ce_vdp, ce_pix, ce_sp, turbo, gg, ggres, systeme,
    assign vram2_WR = (MREQ_n == 1'b0 & A[15:14] == 2'b10 & vdp_cpu_bank == 1'b0 & systeme) ? (~WR_n) : 1'b0;
    assign nvram_WR = (MREQ_n == 1'b0 & ((A[15:14] == 2'b10 & nvram_e) 
                                       | (A[15:14] == 2'b11 & nvram_ex) 
-                                      | (A[15:13] == 3'b101 & nvram_cme))) ? (~WR_n) : 1'b0;
-   assign rom_rd = (MREQ_n == 1'b0 & A[15:14] != 2'b11) ? (~RD_n) : 1'b0;
+                                      | (A[15:13] == 3'b101 & nvram_cme)
+                                      | castle_ram | dahjee_ram)) ? (~WR_n) : 1'b0;
+   assign rom_rd = (MREQ_n == 1'b0 & A[15:14] != 2'b11 & ~castle_ram & ~dahjee_ram) ? (~RD_n) : 1'b0;
    assign color = (vdp2_y1 & systeme & vdp_enables[1] == 1'b0) ? vdp2_color : 
                   vdp_enables[0] == 1'b0 ? vdp_color : 
                   12'h000;
@@ -463,7 +485,13 @@ module system(clk_sys, ce_cpu, ce_vdp, ce_pix, ce_sp, turbo, gg, ggres, systeme,
    assign irom_D_out = (bootloader_n == 1'b0 & A[15:14] == 2'b00) ? boot_rom_D_out : 
                        (encrypt[1:0] == 2'b10 & A[15] == 1'b0) ? segadect2_D_out : 
                        (encrypt[0] & A[15] == 1'b0 | encrypt[1:0] == 2'b11 & A[14] == 1'b0) ? mc8123_D_out : 
+                       janggun_reverse_active ? {rom_do[0], rom_do[1], rom_do[2], rom_do[3], rom_do[4], rom_do[5], rom_do[6], rom_do[7]} :
                        rom_do;
+
+   // Janggun: some banks are stored bit-reversed (MiSTer reverse8)
+   assign janggun_reverse_active = mapper_janggun & bootloader_n &
+                                   ((A[15:13] == 3'b010 & jang_rev1) | (A[15:13] == 3'b011 & jang_rev2) |
+                                    (A[15:13] == 3'b100 & jang_rev3) | (A[15:13] == 3'b101 & jang_rev4));
    
    always @(posedge clk_sys) begin
       if (RESET_n == 1'b0) begin
@@ -492,7 +520,9 @@ module system(clk_sys, ce_cpu, ce_vdp, ce_pix, ce_sp, turbo, gg, ggres, systeme,
          else
             D_out = vdp_D_out;
       end else
-         if (A[15:14] == 2'b11 & nvram_ex)
+         if (castle_ram | dahjee_ram)
+            D_out = nvram_D_out;
+         else if (A[15:14] == 2'b11 & nvram_ex)
             D_out = nvram_D_out;
          else if (A[15:14] == 2'b11 & nvram_ex == 1'b0)
             D_out = ram_D_out;
@@ -532,99 +562,49 @@ module system(clk_sys, ce_cpu, ce_vdp, ce_pix, ce_sp, turbo, gg, ggres, systeme,
          end 
       end 
    
-   // external ram control
-   always @(negedge RESET_n or posedge clk_sys)
-      if (RESET_n == 1'b0) begin
-         bank0 <= 8'b00000000;
-         bank1 <= 8'b00000001;
-         bank2 <= 8'b00000010;
-         bank3 <= 8'b00000011;
-         nvram_e <= 1'b0;
-         nvram_ex <= 1'b0;
-         nvram_p <= 1'b0;
-         nvram_cme <= 1'b0;
-         lock_mapper_B <= 1'b0;
-         mapper_codies <= 1'b0;
-         mapper_codies_lock <= 1'b0;
-      end else begin
-         if (WR_n & MREQ_n == 1'b0)
-            last_read_addr <= A;		// gyurco anti-ldir patch
-         if (systeme)
-            ;
-         // no systeme mappers
-         else if (mapper_msx) begin
-            if (WR_n == 1'b0 & A[15:2] == 14'b00000000000000)
-               case (A[1:0])
-                  2'b00 :
-                     bank2 <= D_in;
-                  2'b01 :
-                     bank3 <= D_in;
-                  2'b10 :
-                     bank0 <= D_in;
-                  2'b11 :
-                     bank1 <= D_in;
-               endcase
-         end 
-         else begin
-            if (WR_n == 1'b0 & A[15:2] == 14'b11111111111111) begin
-               mapper_codies <= 1'b0;
-               case (A[1:0])
-                  2'b00 :
-                     begin
-                        nvram_ex <= D_in[4];
-                        nvram_e <= D_in[3];
-                        nvram_p <= D_in[2];
-                     end
-                  2'b01 :
-                     bank0 <= D_in;
-                  2'b10 :
-                     bank1 <= D_in;
-                  2'b11 :
-                     bank2 <= D_in;
-               endcase
-            end 
-            if (WR_n == 1'b0 & nvram_e == 1'b0 & mapper_lock == 1'b0)
-               case (A[15:0])
-                  // Codemasters
-                  // do not accept writing in adr $0000 (canary) unless we are sure that Codemasters mapper is in use
-                  16'h0000 :
-                     if (lock_mapper_B) begin
-                        bank0 <= D_in;
-                        // we need a strong criteria to set mapper_codies, hopefully only Ernie Els Golf
-                        // will have written a zero in $4000 before coming here
-                        if (D_in != 8'b00000000 & mapper_codies_lock == 1'b0) begin
-                           if (bank1 == 8'b00000001)
-                              mapper_codies <= 1'b1;
-                           mapper_codies_lock <= 1'b1;
-                        end 
-                     end 
-                  16'h4000 :
-                     if (last_read_addr != 16'h4000) begin		// gyurco anti-ldir patch
-                        bank1[6:0] <= D_in[6:0];
-                        bank1[7] <= 1'b0;
-                        // mapper_codies <= mapper_codies or D_in(7) ;
-                        nvram_cme <= D_in[7];
-                        lock_mapper_B <= 1'b1;
-                     end 
-                  16'h8000 :
-                     if (last_read_addr != 16'h8000) begin		// gyurco anti-ldir patch
-                        bank2 <= D_in;
-                        lock_mapper_B <= 1'b1;
-                     end 
-                  // Korean mapper (Sangokushi 3, Dodgeball King)
-                  16'hA000 :
-                     if (last_read_addr != 16'hA000) begin		// gyurco anti-ldir patch
-                        if (mapper_codies == 1'b0)
-                           bank2 <= D_in;
-                     end 
-                  default :
-                     ;
-               endcase
-         end
-      end 
-   
+   // Mapper detection and banking: MiSTer SMS mapper_detect.vhd / mapper_ctrl.vhd (@99dbeee).
+   // No Options menu and no save states here, so every force/restore input is inactive.
+   mapper_detect mapper_detect_inst(
+      .clk_sys(clk_sys), .ROMCL(ROMCL), .ROMAD(ROMAD), .ROMDT(ROMDT), .ROMEN(ROMEN),
+      .RESET_n(RESET_n), .ss_freeze(1'b0), .bootloader_n(bootloader_n), .gg(gg),
+      .A(A), .WR_n(WR_n), .MREQ_n(MREQ_n), .mapper_lock(mapper_lock),
+      .mapper_codies_force(1'b0), .mapper_dahjee_a_force(1'b0), .mapper_linear_force(1'b0),
+      .mapper_zemina_force(1'b0), .mapper_evolution(1'b0), .mapper_msx(mapper_msx),
+      .mapper_4pak(mapper_4pak), .mapper_codies(mapper_codies), .mapper_set(1'b0),
+      .mapper_in(64'd0), .evolution_ss_in(96'd0),
+      .mapper_manual_force_o(mapper_manual_force), .sega_mapper_write_seen_o(sega_mapper_write_seen),
+      .rom_size_pages_o(rom_size_pages), .rom_crc32_o(rom_crc32),
+      .detect_zemina_static_o(detect_zemina_static), .detect_codies_static_o(detect_codies_static),
+      .detect_castle_o(detect_castle), .detect_dahjee_a_o(detect_dahjee_a), .detect_linear_o(detect_linear),
+      .detect_wonderkid_o(detect_wonderkid), .detect_sega_locked_o(detect_sega_locked),
+      .mapper_janggun_o(mapper_janggun), .mapper_castle_o(mapper_castle),
+      .mapper_nemesis_auto_o(mapper_nemesis_auto), .mapper_wonderkid_o(mapper_wonderkid),
+      .mapper_linear_o(mapper_linear), .mapper_sega_locked_o(mapper_sega_locked),
+      .mapper_dahjee_a_o(mapper_dahjee_a), .mapper_eeprom_o(mapper_eeprom), .use_zem_o(use_zem));
+
+   mapper_ctrl mapper_banking(
+      .RESET_n(RESET_n), .clk_sys(clk_sys), .evolution_game_launch(1'b0), .mapper_set(1'b0),
+      .mapper_evolution(1'b0), .evolution_ss_in(96'd0), .mapper_in(64'd0),
+      .mapper_janggun(mapper_janggun), .systeme(systeme), .bootloader_n(bootloader_n),
+      .mapper_wonderkid(mapper_wonderkid), .mapper_lock(mapper_lock),
+      .detect_codies_static(detect_codies_static), .mapper_codies_force(1'b0),
+      .mapper_eeprom(mapper_eeprom), .mapper_zemina_force(1'b0),
+      .mapper_nemesis_auto(mapper_nemesis_auto), .rom_size_pages(rom_size_pages),
+      .ce_z80(ce_z80), .WR_n(WR_n), .MREQ_n(MREQ_n), .A(A), .ss_freeze(1'b0), .D_in(D_in),
+      .sc3000_en(1'b0), .mapper_castle(mapper_castle), .mapper_linear(mapper_linear),
+      .mapper_dahjee_a(mapper_dahjee_a), .mapper_sega_locked(mapper_sega_locked), .use_zem(use_zem),
+      .mapper_manual_force(mapper_manual_force), .sega_mapper_write_seen(sega_mapper_write_seen),
+      .bank0_out(bank0), .bank1_out(bank1), .bank2_out(bank2), .bank3_out(bank3),
+      .jang_bank1_out(jang_bank1), .jang_bank2_out(jang_bank2), .jang_bank3_out(jang_bank3), .jang_bank4_out(jang_bank4),
+      .jang_rev1_out(jang_rev1), .jang_rev2_out(jang_rev2), .jang_rev3_out(jang_rev3), .jang_rev4_out(jang_rev4),
+      .nvram_e_out(nvram_e), .nvram_ex_out(nvram_ex), .nvram_p_out(nvram_p), .nvram_cme_out(nvram_cme),
+      .lock_mapper_B_out(lock_mapper_B), .mapper_codies_out(mapper_codies),
+      .mapper_codies_lock_out(mapper_codies_lock), .mapper_4pak_out(mapper_4pak),
+      .pak4_reg2_out(pak4_reg2), .nem_bank0_out(nem_bank0), .eeprom_soft_reset_out(eeprom_soft_reset));
+
+   // ROM address: MiSTer system.vhd rom_a_i (SC-3000 / multicart / Evolution / BIOS paths omitted).
    assign rom_a[12:0] = A[12:0];
-   
+
    always @*
       if (systeme)
          case (A[15:14])
@@ -633,32 +613,47 @@ module system(clk_sys, ce_cpu, ce_vdp, ce_pix, ce_sp, turbo, gg, ggres, systeme,
             default :
                rom_a[21:13] = {6'b000100, A[15:13]};
          endcase
-      else if (mapper_msx)
+      else if (mapper_linear | mapper_dahjee_a)
+         // no-mapper (MEKA type 11) and Dahjee Type A: linear, unbanked
+         rom_a[21:13] = {6'b000000, A[15:13]};
+      else if (mapper_janggun & bootloader_n)
          case (A[15:13])
-            3'b010 :
-               rom_a[21:13] = {1'b0, bank0};
-            3'b011 :
-               rom_a[21:13] = {1'b0, bank1};
-            3'b100 :
-               rom_a[21:13] = {1'b0, bank2};
-            3'b101 :
-               rom_a[21:13] = {1'b0, bank3};
-            default :
-               rom_a[21:13] = {6'b000000, A[15:13]};
+            3'b010 :  rom_a[21:13] = {3'b000, jang_bank1};
+            3'b011 :  rom_a[21:13] = {3'b000, jang_bank2};
+            3'b100 :  rom_a[21:13] = {3'b000, jang_bank3};
+            3'b101 :  rom_a[21:13] = {3'b000, jang_bank4};
+            default : rom_a[21:13] = {6'b000000, A[15:13]};
          endcase
-      else begin
+      else if (use_zem & bootloader_n)
+         // Zemina / Nemesis (8 KB pages); suppressed while the BIOS runs
+         case (A[15:13])
+            3'b000 :  rom_a[21:13] = {1'b0, nem_bank0};
+            3'b001 :  rom_a[21:13] = 9'b000000001;
+            3'b010 :  rom_a[21:13] = {1'b0, bank0};
+            3'b011 :  rom_a[21:13] = {1'b0, bank1};
+            3'b100 :  rom_a[21:13] = {1'b0, bank2};
+            3'b101 :  rom_a[21:13] = {1'b0, bank3};
+            default : rom_a[21:13] = {6'b000000, A[15:13]};
+         endcase
+      else if (mapper_4pak) begin
+         // 4-PAK All Action: full 16 KB banking, no first-1 KB exception
+         rom_a[13] = A[13];
+         case (A[15:14])
+            2'b00 :   rom_a[21:14] = bank0;
+            2'b01 :   rom_a[21:14] = bank1;
+            default : rom_a[21:14] = bank2;
+         endcase
+      end else begin
          rom_a[13] = A[13];
          case (A[15:14])
             2'b00 :
                // first kilobyte is always from bank 0
                if (A[13:10] == 4'b0000 & mapper_codies == 1'b0)
-                  rom_a[21:14] = {22{1'b0}};
+                  rom_a[21:14] = 8'd0;
                else
                   rom_a[21:14] = bank0;
-            
             2'b01 :
                rom_a[21:14] = bank1;
-            
             default :
                rom_a[21:14] = bank2;
          endcase
